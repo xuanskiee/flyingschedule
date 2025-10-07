@@ -34,7 +34,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Squadron selection
     if data[0] == "squadron":
         squadron = data[1]
-        user_selection[user_id] = {"squadron": squadron, "date": None, "wave": None, "pilots": []}
+        user_selection[user_id] = {"squadron": squadron, "date": None, "pilots": {}}
 
         dates = get_next_seven_days()
         keyboard = [[InlineKeyboardButton(d, callback_data=f"date|{squadron}|{d}")] for d in dates]
@@ -45,57 +45,60 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data[0] == "date":
         squadron, flying_date = data[1], data[2]
         user_selection[user_id]["date"] = flying_date
+        user_selection[user_id]["pilots"] = {wave: [] for wave in DATA[squadron].keys()}
 
-        keyboard = [[InlineKeyboardButton(wave, callback_data=f"wave|{squadron}|{flying_date}|{wave}")]
-                    for wave in DATA[squadron].keys()]
-        await query.edit_message_text(f"Squadron: {squadron}\nDate: {flying_date}\nSelect a wave:",
-                                      reply_markup=InlineKeyboardMarkup(keyboard))
-
-    # 3. Wave selection
-    elif data[0] == "wave":
-        squadron, flying_date, wave = data[1], data[2], data[3]
-        user_selection[user_id]["wave"] = wave
-        user_selection[user_id]["pilots"] = []
-
-        keyboard = [[InlineKeyboardButton(f"{p['name']} ({p['callsign']})",
-                                          callback_data=f"pilot|{squadron}|{flying_date}|{wave}|{p['name']}")]
-                    for p in DATA[squadron][wave]]
+        # Show all pilots from all waves in one menu
+        keyboard = []
+        for wave, pilots in DATA[squadron].items():
+            keyboard.append([InlineKeyboardButton(f"--- {wave} ---", callback_data="ignore")])
+            for p in pilots:
+                keyboard.append([InlineKeyboardButton(f"{p['name']} ({p['callsign']})",
+                                                      callback_data=f"pilot|{squadron}|{flying_date}|{wave}|{p['name']}")])
         keyboard.append([InlineKeyboardButton("✔️ Done", callback_data="done")])
 
         await query.edit_message_text(
-            f"Squadron: {squadron}\nDate: {flying_date}\nWave: {wave}\nSelect pilots:",
+            f"Squadron: {squadron}\nDate: {flying_date}\nSelect pilots from any wave:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # 4. Pilot selection
+    # 3. Pilot selection
     elif data[0] == "pilot":
         squadron, flying_date, wave, pilot_name = data[1], data[2], data[3], data[4]
-        user_selection[user_id]["pilots"].append(pilot_name)
 
-        keyboard = [[InlineKeyboardButton(f"{p['name']} ({p['callsign']})",
-                                          callback_data=f"pilot|{squadron}|{flying_date}|{wave}|{p['name']}")]
-                    for p in DATA[squadron][wave]]
+        if pilot_name not in user_selection[user_id]["pilots"][wave]:
+            user_selection[user_id]["pilots"][wave].append(pilot_name)
+
+        # Refresh pilot list
+        keyboard = []
+        for w, pilots in DATA[squadron].items():
+            keyboard.append([InlineKeyboardButton(f"--- {w} ---", callback_data="ignore")])
+            for p in pilots:
+                keyboard.append([InlineKeyboardButton(f"{p['name']} ({p['callsign']})",
+                                                      callback_data=f"pilot|{squadron}|{flying_date}|{w}|{p['name']}")])
         keyboard.append([InlineKeyboardButton("✔️ Done", callback_data="done")])
 
         await query.edit_message_text(
-            f"Squadron: {squadron}\nDate: {flying_date}\nWave: {wave}\n"
-            f"Pilot added: {pilot_name}\n\nSelect more pilots or press Done:",
+            f"✅ Added {pilot_name}\n\nSelect more pilots or press Done:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    # 5. Final summary
+    # 4. Final summary
     elif data[0] == "done":
         squadron = user_selection[user_id]["squadron"]
         flying_date = user_selection[user_id]["date"]
-        wave = user_selection[user_id]["wave"]
         selected_pilots = user_selection[user_id]["pilots"]
 
-        pilot_info = []
-        for p in DATA[squadron][wave]:
-            if p["name"] in selected_pilots:
-                pilot_info.append(f"- {p['name']} ({p['callsign']})")
+        summary_lines = []
+        for wave, names in selected_pilots.items():
+            if names:
+                pilots_text = []
+                for p in DATA[squadron][wave]:
+                    if p["name"] in names:
+                        pilots_text.append(f"{p['name']} ({p['callsign']})")
+                if pilots_text:
+                    summary_lines.append(f"- {wave}: " + ", ".join(pilots_text))
 
-        if not pilot_info:
+        if not summary_lines:
             await query.edit_message_text("⚠️ No pilots selected. Please choose at least one.")
             return
 
@@ -103,8 +106,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Final Selection\n\n"
             f"**Squadron:** {squadron}\n"
             f"**Date:** {flying_date}\n"
-            f"**Wave:** {wave}\n"
-            f"**Pilots:**\n" + "\n".join(pilot_info)
+            f"**Pilots:**\n" + "\n".join(summary_lines)
         )
 
 def main():
