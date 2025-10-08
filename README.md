@@ -43,7 +43,7 @@ def build_summary(user_id, editing_wave=None):
         if names:
             text += f"{wave}:\n"
             for name in names:
-                # find callsign from pilot list
+                # get callsign
                 callsign = next((p["callsign"] for p in PILOT_LIST if p["name"] == name), "")
                 text += f"- {name} ({callsign})\n"
         else:
@@ -74,7 +74,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Squadron selected
     if data[0] == "squadron":
         squadron = data[1]
-        user_selection[user_id] = {"squadron": squadron, "date": None, "pilots": {"Wave 1": [], "Wave 2": [], "Wave 3": [], "Wave 4": []}}
+        user_selection[user_id] = {"squadron": squadron, "date": None,
+                                   "pilots": {"Wave 1": [], "Wave 2": [], "Wave 3": [], "Wave 4": []}}
 
         dates = get_next_seven_days()
         keyboard = [[InlineKeyboardButton(d, callback_data=f"date|{d}")] for d in dates]
@@ -122,7 +123,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pilot_name not in user_selection[user_id]["pilots"][wave]:
             user_selection[user_id]["pilots"][wave].append(pilot_name)
 
-        # rebuild pilot selection view
+        # rebuild view
         selection = user_selection[user_id]["pilots"][wave]
         keyboard = []
         for p in PILOT_LIST:
@@ -145,7 +146,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pilot_name in user_selection[user_id]["pilots"][wave]:
             user_selection[user_id]["pilots"][wave].remove(pilot_name)
 
-        # rebuild pilot selection view
+        # rebuild view
         selection = user_selection[user_id]["pilots"][wave]
         keyboard = []
         for p in PILOT_LIST:
@@ -195,21 +196,4 @@ python-telegram-bot==20.6
 gspread==5.7.0
 oauth2client==4.1.3
 
-# Telegram Pilot Selection Bot ✈️
-
-A Telegram bot to select pilots from squadrons, waves, and dates.
-
-## Setup
-
-1. Clone this repo or import it into Replit.
-2. In Replit, go to **Secrets** (🔑) and add:
-   - Key: `BOT_TOKEN`
-   - Value: (your Telegram BotFather token)
-3. Run the bot.
-
-## Usage
-
-- `/start` → Select Squadron → Date → Wave → Pilots
-- Multiple pilots can be selected.
-- Final summary shows Squadron, Date, Wave, Pilots.
-- Edit `data.json` to update squadrons, waves, and pilot callsigns.
+worker: python main.py
