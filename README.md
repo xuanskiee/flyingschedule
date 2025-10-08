@@ -5,8 +5,31 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Load pilot data
-with open("data.json", "r") as f:
-    DATA = json.load(f)
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+def load_pilot_data():
+    scope = ["https://spreadsheets.google.com/feeds",
+             "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name("service_account.json", scope)
+    client = gspread.authorize(creds)
+
+    sheet = client.open("PilotLibrary").sheet1
+    records = sheet.get_all_records()  # list of dicts
+
+    # Convert into { squadron: [ {name, callsign}, ... ] }
+    data = {}
+    for row in records:
+        sq = str(row['Squadron'])
+        name = row['Pilot Name']
+        callsign = row['Callsign']
+        if sq not in data:
+            data[sq] = []
+        data[sq].append({'name': name, 'callsign': callsign})
+
+    return data
+
+DATA = load_pilot_data()
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -150,6 +173,8 @@ if __name__ == "__main__":
 }
 
 python-telegram-bot==20.6
+gspread==5.7.0
+oauth2client==4.1.3
 
 # Telegram Pilot Selection Bot ✈️
 
