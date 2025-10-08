@@ -37,28 +37,25 @@ def get_next_seven_days():
 def build_summary(user_id, editing_wave=None):
     selection = user_selection[user_id]
     text = f"🛩 Squadron: {selection['squadron']}\n📅 Date: {selection['date']}\n\n"
-
     for wave in ["Wave 1", "Wave 2", "Wave 3", "Wave 4"]:
         names = selection["pilots"].get(wave, [])
         if names:
-            text += f"{wave}:\n"
-            for name in names:
-                # find callsign from pilot list
-                callsign = next((p["callsign"] for p in PILOT_LIST if p["name"] == name), "")
-                text += f"- {name} ({callsign})\n"
+            text += f"{wave}: {', '.join(names)}\n"
         else:
             text += f"{wave}: —\n"
-        text += "\n"
-
     if editing_wave:
-        text += f"Now editing: {editing_wave}"
+        text += f"\nNow editing: {editing_wave}"
     return text
 
 # --- Start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dates = get_next_seven_days()
-    keyboard = [[InlineKeyboardButton(d, callback_data=f"date|{d}")] for d in dates]
-    await update.message.reply_text("Select flying date:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [
+        [InlineKeyboardButton("140 Squadron", callback_data="squadron|140")],
+        [InlineKeyboardButton("143 Squadron", callback_data="squadron|143")],
+        [InlineKeyboardButton("145 Squadron", callback_data="squadron|145")]
+    ]
+    await update.message.reply_text("Select a squadron:",
+                                    reply_markup=InlineKeyboardMarkup(keyboard))
 
 # --- Handle button clicks ---
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,10 +64,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data.split("|")
     user_id = query.from_user.id
 
-    # 1. Date selected
-    if data[0] == "date":
+    # 1. Squadron selected
+    if data[0] == "squadron":
+        squadron = data[1]
+        user_selection[user_id] = {"squadron": squadron, "date": None, "pilots": {"Wave 1": [], "Wave 2": [], "Wave 3": [], "Wave 4": []}}
+
+        dates = get_next_seven_days()
+        keyboard = [[InlineKeyboardButton(d, callback_data=f"date|{d}")] for d in dates]
+        await query.edit_message_text(f"🛩 Squadron: {squadron}\nSelect flying date:",
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # 2. Date selected
+    elif data[0] == "date":
         flying_date = data[1]
-        user_selection[user_id] = {"date": flying_date, "pilots": {"Wave 1": [], "Wave 2": [], "Wave 3": [], "Wave 4": []}}
+        user_selection[user_id]["date"] = flying_date
 
         keyboard = [
             [InlineKeyboardButton("Wave 1", callback_data=f"wave|{flying_date}|Wave 1")],
@@ -79,13 +86,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Wave 4", callback_data=f"wave|{flying_date}|Wave 4")],
             [InlineKeyboardButton("✔ Finish", callback_data="done")]
         ]
-        await query.edit_message_text(f"📅 Date: {flying_date}\nSelect a wave:",
+        await query.edit_message_text(f"🛩 Squadron: {user_selection[user_id]['squadron']}\n📅 Date: {flying_date}\nSelect a wave:",
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 2. Wave selected → show pilot list
+    # 3. Wave selected → show pilot list
     elif data[0] == "wave":
         flying_date, wave = data[1], data[2]
-
         selection = user_selection[user_id]["pilots"][wave]
 
         keyboard = []
@@ -103,15 +109,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(build_summary(user_id, editing_wave=wave),
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 3. Add pilot
+    # 4. Add pilot
     elif data[0] == "add":
         wave, pilot_name = data[1], data[2]
         if pilot_name not in user_selection[user_id]["pilots"][wave]:
             user_selection[user_id]["pilots"][wave].append(pilot_name)
 
+        # rebuild pilot selection view
+        selection = user_selection[user_id]["pilots"][wave]
         keyboard = []
         for p in PILOT_LIST:
-            if p["name"] in user_selection[user_id]["pilots"][wave]:
+            if p["name"] in selection:
                 keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
                                                       callback_data=f"remove|{wave}|{p['name']}")])
             else:
@@ -124,15 +132,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(build_summary(user_id, editing_wave=wave),
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 4. Remove pilot
+    # 5. Remove pilot
     elif data[0] == "remove":
         wave, pilot_name = data[1], data[2]
         if pilot_name in user_selection[user_id]["pilots"][wave]:
             user_selection[user_id]["pilots"][wave].remove(pilot_name)
 
+        # rebuild pilot selection view
+        selection = user_selection[user_id]["pilots"][wave]
         keyboard = []
         for p in PILOT_LIST:
-            if p["name"] in user_selection[user_id]["pilots"][wave]:
+            if p["name"] in selection:
                 keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
                                                       callback_data=f"remove|{wave}|{p['name']}")])
             else:
@@ -145,7 +155,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(build_summary(user_id, editing_wave=wave),
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 5. Back to wave menu
+    # 6. Back to wave menu
     elif data[0] == "back":
         flying_date = data[1]
         keyboard = [
@@ -158,7 +168,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(build_summary(user_id),
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 6. Final summary
+    # 7. Final summary
     elif data[0] == "done":
         summary = build_summary(user_id)
         await query.edit_message_text(f"✅ Final Selection\n\n{summary}")
