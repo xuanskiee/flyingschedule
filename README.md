@@ -213,5 +213,3 @@ A Telegram bot to select pilots from squadrons, waves, and dates.
 - Multiple pilots can be selected.
 - Final summary shows Squadron, Date, Wave, Pilots.
 - Edit `data.json` to update squadrons, waves, and pilot callsigns.
-
-worker: python main.py
