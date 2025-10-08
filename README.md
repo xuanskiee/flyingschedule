@@ -4,6 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import math
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -25,6 +26,7 @@ def load_pilot_data():
     return data
 
 PILOT_LIST = load_pilot_data()
+PILOTS_PER_PAGE = 10
 
 # --- Store user selections ---
 user_selection = {}
@@ -43,7 +45,6 @@ def build_summary(user_id, editing_wave=None):
         if names:
             text += f"{wave}:\n"
             for name in names:
-                # get callsign
                 callsign = next((p["callsign"] for p in PILOT_LIST if p["name"] == name), "")
                 text += f"- {name} ({callsign})\n"
         else:
@@ -64,6 +65,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Select a squadron:",
                                     reply_markup=InlineKeyboardMarkup(keyboard))
 
+# --- Build paginated pilot keyboard ---
+def build_pilot_keyboard(user_id, wave, page=1):
+    selection = user_selection[user_id]["pilots"][wave]
+    start_idx = (page - 1) * PILOTS_PER_PAGE
+    end_idx = start_idx + PILOTS_PER_PAGE
+    pilots_page = PILOT_LIST[start_idx:end_idx]
+
+    keyboard = []
+    for p in pilots_page:
+        if p["name"] in selection:
+            keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
+                                                  callback_data=f"remove|{wave}|{p['name']}|{page}")])
+        else:
+            keyboard.append([InlineKeyboardButton(f"➕ {p['name']} ({p['callsign']})",
+                                                  callback_data=f"add|{wave}|{p['name']}|{page}")])
+
+    # Pagination buttons
+    total_pages = math.ceil(len(PILOT_LIST)/PILOTS_PER_PAGE)
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton("⬅ Previous", callback_data=f"page|{wave}|{page-1}"))
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton("Next ➡", callback_data=f"page|{wave}|{page+1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+    # Back & Finish
+    keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{user_selection[user_id]['date']}")])
+    keyboard.append([InlineKeyboardButton("✔ Finish", callback_data="done")])
+
+    return InlineKeyboardMarkup(keyboard)
+
 # --- Handle button clicks ---
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -71,7 +104,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data.split("|")
     user_id = query.from_user.id
 
-    # 1. Squadron selected
+    # Squadron selected
     if data[0] == "squadron":
         squadron = data[1]
         user_selection[user_id] = {"squadron": squadron, "date": None,
@@ -82,7 +115,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"🛩 Squadron: {squadron}\nSelect flying date:",
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 2. Date selected
+    # Date selected
     elif data[0] == "date":
         flying_date = data[1]
         user_selection[user_id]["date"] = flying_date
@@ -97,73 +130,39 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"🛩 Squadron: {user_selection[user_id]['squadron']}\n📅 Date: {flying_date}\nSelect a wave:",
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 3. Wave selected → show pilot list
+    # Wave selected
     elif data[0] == "wave":
         flying_date, wave = data[1], data[2]
-        selection = user_selection[user_id]["pilots"][wave]
-
-        keyboard = []
-        for p in PILOT_LIST:
-            if p["name"] in selection:
-                keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
-                                                      callback_data=f"remove|{wave}|{p['name']}")])
-            else:
-                keyboard.append([InlineKeyboardButton(f"➕ {p['name']} ({p['callsign']})",
-                                                      callback_data=f"add|{wave}|{p['name']}")])
-
-        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{flying_date}")])
-        keyboard.append([InlineKeyboardButton("✔ Finish", callback_data="done")])
-
+        markup = build_pilot_keyboard(user_id, wave)
         await query.edit_message_text(build_summary(user_id, editing_wave=wave),
-                                      reply_markup=InlineKeyboardMarkup(keyboard))
+                                      reply_markup=markup)
 
-    # 4. Add pilot
+    # Add pilot
     elif data[0] == "add":
-        wave, pilot_name = data[1], data[2]
+        wave, pilot_name, page = data[1], data[2], int(data[3])
         if pilot_name not in user_selection[user_id]["pilots"][wave]:
             user_selection[user_id]["pilots"][wave].append(pilot_name)
-
-        # rebuild view
-        selection = user_selection[user_id]["pilots"][wave]
-        keyboard = []
-        for p in PILOT_LIST:
-            if p["name"] in selection:
-                keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
-                                                      callback_data=f"remove|{wave}|{p['name']}")])
-            else:
-                keyboard.append([InlineKeyboardButton(f"➕ {p['name']} ({p['callsign']})",
-                                                      callback_data=f"add|{wave}|{p['name']}")])
-
-        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{user_selection[user_id]['date']}")])
-        keyboard.append([InlineKeyboardButton("✔ Finish", callback_data="done")])
-
+        markup = build_pilot_keyboard(user_id, wave, page)
         await query.edit_message_text(build_summary(user_id, editing_wave=wave),
-                                      reply_markup=InlineKeyboardMarkup(keyboard))
+                                      reply_markup=markup)
 
-    # 5. Remove pilot
+    # Remove pilot
     elif data[0] == "remove":
-        wave, pilot_name = data[1], data[2]
+        wave, pilot_name, page = data[1], data[2], int(data[3])
         if pilot_name in user_selection[user_id]["pilots"][wave]:
             user_selection[user_id]["pilots"][wave].remove(pilot_name)
-
-        # rebuild view
-        selection = user_selection[user_id]["pilots"][wave]
-        keyboard = []
-        for p in PILOT_LIST:
-            if p["name"] in selection:
-                keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
-                                                      callback_data=f"remove|{wave}|{p['name']}")])
-            else:
-                keyboard.append([InlineKeyboardButton(f"➕ {p['name']} ({p['callsign']})",
-                                                      callback_data=f"add|{wave}|{p['name']}")])
-
-        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{user_selection[user_id]['date']}")])
-        keyboard.append([InlineKeyboardButton("✔ Finish", callback_data="done")])
-
+        markup = build_pilot_keyboard(user_id, wave, page)
         await query.edit_message_text(build_summary(user_id, editing_wave=wave),
-                                      reply_markup=InlineKeyboardMarkup(keyboard))
+                                      reply_markup=markup)
 
-    # 6. Back to wave menu
+    # Pagination
+    elif data[0] == "page":
+        wave, page = data[1], int(data[2])
+        markup = build_pilot_keyboard(user_id, wave, page)
+        await query.edit_message_text(build_summary(user_id, editing_wave=wave),
+                                      reply_markup=markup)
+
+    # Back to wave menu
     elif data[0] == "back":
         flying_date = data[1]
         keyboard = [
@@ -176,7 +175,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(build_summary(user_id),
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 7. Final summary
+    # Final summary
     elif data[0] == "done":
         summary = build_summary(user_id)
         await query.edit_message_text(f"✅ Final Selection\n\n{summary}")
