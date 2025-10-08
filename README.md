@@ -173,6 +173,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 python-telegram-bot==20.6
 gspread==5.7.0
 oauth2client==4.1.3
@@ -195,3 +196,5 @@ A Telegram bot to select pilots from squadrons, waves, and dates.
 - Multiple pilots can be selected.
 - Final summary shows Squadron, Date, Wave, Pilots.
 - Edit `data.json` to update squadrons, waves, and pilot callsigns.
+
+worker: python main.py
