@@ -36,15 +36,22 @@ def get_next_seven_days():
 # --- Helper: build summary text ---
 def build_summary(user_id, editing_wave=None):
     selection = user_selection[user_id]
-    text = f"📅 Date: {selection['date']}\n\n"
+    text = f"🛩 Squadron: {selection['squadron']}\n📅 Date: {selection['date']}\n\n"
+
     for wave in ["Wave 1", "Wave 2", "Wave 3", "Wave 4"]:
         names = selection["pilots"].get(wave, [])
         if names:
-            text += f"{wave}: {', '.join(names)}\n"
+            text += f"{wave}:\n"
+            for name in names:
+                # find callsign from pilot list
+                callsign = next((p["callsign"] for p in PILOT_LIST if p["name"] == name), "")
+                text += f"- {name} ({callsign})\n"
         else:
             text += f"{wave}: —\n"
+        text += "\n"
+
     if editing_wave:
-        text += f"\nNow editing: {editing_wave}"
+        text += f"Now editing: {editing_wave}"
     return text
 
 # --- Start ---
