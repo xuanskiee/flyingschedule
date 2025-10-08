@@ -1,13 +1,13 @@
 import os
-import json
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-
-# Load pilot data
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+TOKEN = os.getenv("BOT_TOKEN")
+
+# --- Load Google Sheet ---
 def load_pilot_data():
     scope = ["https://spreadsheets.google.com/feeds",
              "https://www.googleapis.com/auth/drive"]
@@ -15,138 +15,148 @@ def load_pilot_data():
     client = gspread.authorize(creds)
 
     sheet = client.open("PilotLibrary").sheet1
-    records = sheet.get_all_records()  # list of dicts
+    records = sheet.get_all_records()
 
-    # Convert into { squadron: [ {name, callsign}, ... ] }
-    data = {}
+    data = []
     for row in records:
-        sq = str(row['Squadron'])
         name = row['Pilot Name']
         callsign = row['Callsign']
-        if sq not in data:
-            data[sq] = []
-        data[sq].append({'name': name, 'callsign': callsign})
-
+        data.append({'name': name, 'callsign': callsign})
     return data
 
-DATA = load_pilot_data()
+PILOT_LIST = load_pilot_data()
 
-TOKEN = os.getenv("BOT_TOKEN")
-
-# Store user selections
+# --- Store user selections ---
 user_selection = {}
 
-# Generate next 7 days for date selection
 def get_next_seven_days():
     today = datetime.today()
     return [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
 
-# Start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(sq, callback_data=f"squadron|{sq}")]
-                for sq in DATA.keys()]
-    await update.message.reply_text("Select a squadron:",
-                                    reply_markup=InlineKeyboardMarkup(keyboard))
+# --- Helper: build summary text ---
+def build_summary(user_id, editing_wave=None):
+    selection = user_selection[user_id]
+    text = f"📅 Date: {selection['date']}\n\n"
+    for wave in ["Wave 1", "Wave 2", "Wave 3", "Wave 4"]:
+        names = selection["pilots"].get(wave, [])
+        if names:
+            text += f"{wave}: {', '.join(names)}\n"
+        else:
+            text += f"{wave}: —\n"
+    if editing_wave:
+        text += f"\nNow editing: {editing_wave}"
+    return text
 
-# Button handler
+# --- Start ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dates = get_next_seven_days()
+    keyboard = [[InlineKeyboardButton(d, callback_data=f"date|{d}")] for d in dates]
+    await update.message.reply_text("Select flying date:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- Handle button clicks ---
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data.split("|")
     user_id = query.from_user.id
 
-    # 1. Squadron selected
-    if data[0] == "squadron":
-        squadron = data[1]
-        user_selection[user_id] = {"squadron": squadron, "date": None, "pilots": {}}
-
-        dates = get_next_seven_days()
-        keyboard = [[InlineKeyboardButton(d, callback_data=f"date|{squadron}|{d}")] for d in dates]
-        await query.edit_message_text(f"Squadron: {squadron}\nSelect flying date:",
-                                      reply_markup=InlineKeyboardMarkup(keyboard))
-
-    # 2. Date selected
-    elif data[0] == "date":
-        squadron, flying_date = data[1], data[2]
-        user_selection[user_id]["date"] = flying_date
-        user_selection[user_id]["pilots"] = {"Wave 1": [], "Wave 2": []}
+    # 1. Date selected
+    if data[0] == "date":
+        flying_date = data[1]
+        user_selection[user_id] = {"date": flying_date, "pilots": {"Wave 1": [], "Wave 2": [], "Wave 3": [], "Wave 4": []}}
 
         keyboard = [
-            [InlineKeyboardButton("Wave 1", callback_data=f"wave|{squadron}|{flying_date}|Wave 1")],
-            [InlineKeyboardButton("Wave 2", callback_data=f"wave|{squadron}|{flying_date}|Wave 2")],
+            [InlineKeyboardButton("Wave 1", callback_data=f"wave|{flying_date}|Wave 1")],
+            [InlineKeyboardButton("Wave 2", callback_data=f"wave|{flying_date}|Wave 2")],
+            [InlineKeyboardButton("Wave 3", callback_data=f"wave|{flying_date}|Wave 3")],
+            [InlineKeyboardButton("Wave 4", callback_data=f"wave|{flying_date}|Wave 4")],
             [InlineKeyboardButton("✔ Finish", callback_data="done")]
         ]
-
-        await query.edit_message_text(f"Squadron: {squadron}\nDate: {flying_date}\nSelect a wave:",
+        await query.edit_message_text(f"📅 Date: {flying_date}\nSelect a wave:",
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # 3. Wave selected → show full squadron pilot list
+    # 2. Wave selected → show pilot list
     elif data[0] == "wave":
-        squadron, flying_date, wave = data[1], data[2], data[3]
+        flying_date, wave = data[1], data[2]
 
-        keyboard = [
-            [InlineKeyboardButton(f"{p['name']} ({p['callsign']})",
-                                  callback_data=f"pilot|{squadron}|{flying_date}|{wave}|{p['name']}")]
-            for p in DATA[squadron]
-        ]
-        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{squadron}|{flying_date}")])
+        selection = user_selection[user_id]["pilots"][wave]
 
-        await query.edit_message_text(
-            f"Squadron: {squadron}\nDate: {flying_date}\nWave: {wave}\nSelect pilots:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        keyboard = []
+        for p in PILOT_LIST:
+            if p["name"] in selection:
+                keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
+                                                      callback_data=f"remove|{wave}|{p['name']}")])
+            else:
+                keyboard.append([InlineKeyboardButton(f"➕ {p['name']} ({p['callsign']})",
+                                                      callback_data=f"add|{wave}|{p['name']}")])
 
-    # 4. Pilot selected → add to wave list
-    elif data[0] == "pilot":
-        squadron, flying_date, wave, pilot_name = data[1], data[2], data[3], data[4]
+        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{flying_date}")])
+        keyboard.append([InlineKeyboardButton("✔ Finish", callback_data="done")])
 
+        await query.edit_message_text(build_summary(user_id, editing_wave=wave),
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # 3. Add pilot
+    elif data[0] == "add":
+        wave, pilot_name = data[1], data[2]
         if pilot_name not in user_selection[user_id]["pilots"][wave]:
             user_selection[user_id]["pilots"][wave].append(pilot_name)
 
-        keyboard = [
-            [InlineKeyboardButton(f"{p['name']} ({p['callsign']})",
-                                  callback_data=f"pilot|{squadron}|{flying_date}|{wave}|{p['name']}")]
-            for p in DATA[squadron]
-        ]
-        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{squadron}|{flying_date}")])
+        keyboard = []
+        for p in PILOT_LIST:
+            if p["name"] in user_selection[user_id]["pilots"][wave]:
+                keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
+                                                      callback_data=f"remove|{wave}|{p['name']}")])
+            else:
+                keyboard.append([InlineKeyboardButton(f"➕ {p['name']} ({p['callsign']})",
+                                                      callback_data=f"add|{wave}|{p['name']}")])
 
-        await query.edit_message_text(
-            f"✅ Added {pilot_name}\n\nSquadron: {squadron}\nDate: {flying_date}\nWave: {wave}\nSelect more pilots:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{user_selection[user_id]['date']}")])
+        keyboard.append([InlineKeyboardButton("✔ Finish", callback_data="done")])
+
+        await query.edit_message_text(build_summary(user_id, editing_wave=wave),
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
+
+    # 4. Remove pilot
+    elif data[0] == "remove":
+        wave, pilot_name = data[1], data[2]
+        if pilot_name in user_selection[user_id]["pilots"][wave]:
+            user_selection[user_id]["pilots"][wave].remove(pilot_name)
+
+        keyboard = []
+        for p in PILOT_LIST:
+            if p["name"] in user_selection[user_id]["pilots"][wave]:
+                keyboard.append([InlineKeyboardButton(f"❌ {p['name']} ({p['callsign']})",
+                                                      callback_data=f"remove|{wave}|{p['name']}")])
+            else:
+                keyboard.append([InlineKeyboardButton(f"➕ {p['name']} ({p['callsign']})",
+                                                      callback_data=f"add|{wave}|{p['name']}")])
+
+        keyboard.append([InlineKeyboardButton("⬅ Back to Waves", callback_data=f"back|{user_selection[user_id]['date']}")])
+        keyboard.append([InlineKeyboardButton("✔ Finish", callback_data="done")])
+
+        await query.edit_message_text(build_summary(user_id, editing_wave=wave),
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
 
     # 5. Back to wave menu
     elif data[0] == "back":
-        squadron, flying_date = data[1], data[2]
+        flying_date = data[1]
         keyboard = [
-            [InlineKeyboardButton("Wave 1", callback_data=f"wave|{squadron}|{flying_date}|Wave 1")],
-            [InlineKeyboardButton("Wave 2", callback_data=f"wave|{squadron}|{flying_date}|Wave 2")],
+            [InlineKeyboardButton("Wave 1", callback_data=f"wave|{flying_date}|Wave 1")],
+            [InlineKeyboardButton("Wave 2", callback_data=f"wave|{flying_date}|Wave 2")],
+            [InlineKeyboardButton("Wave 3", callback_data=f"wave|{flying_date}|Wave 3")],
+            [InlineKeyboardButton("Wave 4", callback_data=f"wave|{flying_date}|Wave 4")],
             [InlineKeyboardButton("✔ Finish", callback_data="done")]
         ]
-        await query.edit_message_text(f"Squadron: {squadron}\nDate: {flying_date}\nSelect a wave:",
+        await query.edit_message_text(build_summary(user_id),
                                       reply_markup=InlineKeyboardMarkup(keyboard))
 
     # 6. Final summary
     elif data[0] == "done":
-        squadron = user_selection[user_id]["squadron"]
-        flying_date = user_selection[user_id]["date"]
-        all_waves = user_selection[user_id]["pilots"]
+        summary = build_summary(user_id)
+        await query.edit_message_text(f"✅ Final Selection\n\n{summary}")
 
-        summary = [f"✅ Final Selection\n\nSquadron: {squadron}\nDate: {flying_date}\n"]
-        for wave, names in all_waves.items():
-            if names:
-                pilots_text = []
-                for p in DATA[squadron]:
-                    if p["name"] in names:
-                        pilots_text.append(f"{p['name']} ({p['callsign']})")
-                summary.append(f"{wave}: " + ", ".join(pilots_text))
-
-        if len(summary) == 1:
-            await query.edit_message_text("⚠️ No pilots selected. Please choose at least one.")
-        else:
-            await query.edit_message_text("\n".join(summary))
-
-# Run bot
+# --- Run bot ---
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -156,22 +166,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-{
-  "140": [
-    {"name": "John Doe", "callsign": "Viper 1"},
-    {"name": "Jane Roe", "callsign": "Viper 2"},
-    {"name": "Mike Lee", "callsign": "Viper 3"}
-  ],
-  "143": [
-    {"name": "Sam Smith", "callsign": "Eagle 1"},
-    {"name": "Chris Wong", "callsign": "Eagle 2"}
-  ],
-  "145": [
-    {"name": "Alex Tan", "callsign": "Falcon 1"},
-    {"name": "David Lim", "callsign": "Falcon 2"}
-  ]
-}
-
 python-telegram-bot==20.6
 gspread==5.7.0
 oauth2client==4.1.3
